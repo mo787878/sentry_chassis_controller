@@ -1,0 +1,7 @@
+controller:
+  sentry_chassis_controller:
+    type: sentry_chassis_controller/SentryChassisController
+
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50

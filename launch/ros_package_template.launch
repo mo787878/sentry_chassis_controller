@@ -1,8 +1,0 @@
-<launch>
-
-  <!-- Launch ROS Package Template Node -->
-  <node pkg="sentry_chassis_controller" type="sentry_chassis_controller" name="sentry_chassis_controller" output="screen">
-    <rosparam command="load" file="$(dirname)/../config/default.yaml"/>
-  </node>
-
-</launch>
