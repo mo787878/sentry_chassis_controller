@@ -1,4 +1,4 @@
-<library path="lib/libsimple_chassis_controller">
+<library path="lib/libsentry_chassis_controller">
 
     <class name="sentry_chassis_controller/SentryChassisController"
            type="sentry_chassis_controller::SentryChassisController"

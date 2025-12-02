@@ -1,4 +1,5 @@
 <launch>
+  <rosparam file="$(find sentry_chassis_controller)/config/pid_params.yaml" command="load"/>
   <include file="$(find rm_description)/launch/sentry.launch">
     <arg name="load_chassis" value="true"/>
     <arg name="roller_type" value="realistic"/>
@@ -12,5 +13,6 @@
         controller/sentry_chassis_controller
         controller/joint_state_controller
   "/>
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sentry_chassis_controller)/config/car.rviz"/>
 
 </launch>

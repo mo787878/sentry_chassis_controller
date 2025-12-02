@@ -12,15 +12,16 @@
   <!-- build_depend: dependencies only used in source files -->
   <!-- depend: build, export, and execution dependency -->
   <depend>roscpp</depend>
-  <depend>sensor_msgs</depend>
   <depend>roslint</depend>
   <depend>controller_interface</depend>
   <depend>hardware_interface</depend>
   <depend>forward_command_controller</depend>
   <depend>pluginlib</depend>
   <depend>control_toolbox</depend>
+  <depend>dynamic_reconfigure</depend>
+
 
   <export>
-    <controller_interface plugin="${prefix}/simple_chassis_controller_plugins.xml"/>
+    <controller_interface plugin="${prefix}/sentry_chassis_controller_plugins.xml"/>
   </export>
 </package>

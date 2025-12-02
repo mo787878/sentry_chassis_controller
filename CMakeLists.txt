@@ -19,7 +19,11 @@ find_package(catkin REQUIRED
         forward_command_controller
         pluginlib
         control_toolbox
+        dynamic_reconfigure
     )
+generate_dynamic_reconfigure_options(
+        cfg/SentryChassisParams.cfg
+)
 
 
 ###################################
@@ -34,9 +38,9 @@ find_package(catkin REQUIRED
 catkin_package(
     INCLUDE_DIRS
     include
+    ${CATKIN_DEVEL_PREFIX}/include
     ## This is only necessary because Eigen3 sets a non-standard EIGEN3_INCLUDE_DIR variable
-    LIBRARIES
-    ${PROJECT_NAME}
+    LIBRARIES ${PROJECT_NAME}
         CATKIN_DEPENDS
         roscpp
         roslint
@@ -45,6 +49,7 @@ catkin_package(
         forward_command_controller
         pluginlib
         control_toolbox
+        dynamic_reconfigure
         DEPENDS
     ## find_package(Eigen3) provides a non standard EIGEN3_INCLUDE_DIR instead of Eigen3_INCLUDE_DIRS.
     ## Therefore, the DEPEND does not work as expected and we need to add the directory to the INCLUDE_DIRS
@@ -63,6 +68,7 @@ catkin_package(
 include_directories(
     include
     ${catkin_INCLUDE_DIRS}
+        ../../devel/include
     # Set manually because Eigen sets a non standard INCLUDE DIR
 )
 
@@ -75,7 +81,10 @@ add_library(${PROJECT_NAME}
 
 ## Add dependencies to exported targets, like ROS msgs or srvs
 add_dependencies(${PROJECT_NAME}
-    ${catkin_EXPORTED_TARGETS}
+        ${${PROJECT_NAME}_EXPORTED_TARGETS}
+        ${catkin_EXPORTED_TARGETS}
+        ${PROJECT_NAME}_gencfg
+
     )
 
 
