@@ -1,18 +1,26 @@
 <launch>
+  <param name="/use_sim_time" value="true"/>
   <rosparam file="$(find sentry_chassis_controller)/config/pid_params.yaml" command="load"/>
+   <rosparam file="$(find sentry_chassis_controller)/config/controllers.yaml" command="load"/>
+
   <include file="$(find rm_description)/launch/sentry.launch">
     <arg name="load_chassis" value="true"/>
     <arg name="roller_type" value="realistic"/>
     <arg name="paused" value="true"/>
   </include>
 
-  <rosparam file="$(find sentry_chassis_controller)/config/controllers.yaml" command="load"/>
-  <!-- load the controllers -->
-  <node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false"
-        output="screen" args="
-        controller/sentry_chassis_controller
-        controller/joint_state_controller
-  "/>
+  <node name="controller_manager" pkg="controller_manager" type="controller_manager"
+          output="screen" args="spawn">
+
+    </node>
+
+    <node name="controller_spawner" pkg="controller_manager" type="spawner"
+          respawn="false" output="screen" args="
+           controller/sentry_chassis_controller
+           controller/joint_state_controller
+          "/>
+
+
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find sentry_chassis_controller)/config/car.rviz"/>
 
 </launch>

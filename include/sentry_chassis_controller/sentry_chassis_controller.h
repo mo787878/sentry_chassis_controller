@@ -6,9 +6,12 @@
 #define SENTRY_CHASSIS_CONTROLLER_SENTRY_CHASSIS_CONTROLLER_H
 
 #include <ros/ros.h>
+#include <geometry_msgs/Twist.h>
 #include <controller_interface/controller.h>
 #include <hardware_interface/joint_command_interface.h>
 #include <control_toolbox/pid.h>
+#include <cmath>
+#include <ros/time.h>
 //#include <sentry_chassis_controller/SentryChassisParamsConfig.h>
 
 namespace sentry_chassis_controller {
@@ -22,6 +25,7 @@ public:
 
     void update(const ros::Time &time, const ros::Duration &Period) override;
 
+
     //void  reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level);
 
 
@@ -32,9 +36,18 @@ private:
     ros::Time last_change_;
     double wheel_track_;
     double wheel_base_;
+    double wheel_radius_;// 轮子半径
     control_toolbox::Pid pid_lf_, pid_rf_, pid_lb_, pid_rb_;
     control_toolbox::Pid pid_lf_wheel_, pid_rf_wheel_, pid_lb_wheel_, pid_rb_wheel_;
     double p_, i_, d_, i_max_, i_min_, p_wheel, i_wheel, d_wheel, i_max_wheel, i_min_wheel, chassis_speed;
+    ros::Subscriber cmd_vel_sub_;  // 用于接收速度指令
+    geometry_msgs::Twist cmd_vel_; // 存储当前速度指令
+    ros::Publisher  cmd_vel_pub_;  // /cmd_vel 发布者
+
+    ros::Time last_publish_time_;   // 上一次发布时间
+    ros::Duration publish_interval_;// 发布间隔（默认0.1秒=10Hz）
+
+    void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
     //dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig> dyn_srv_;
     //bool params_initialized_ = false;
 };
