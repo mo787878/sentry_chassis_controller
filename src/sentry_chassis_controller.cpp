@@ -118,9 +118,9 @@ namespace sentry_chassis_controller {
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 0.0;    // 前进速度0.2m/s
-            cmd_msg.linear.y = 0.0;    // 横向速度0
-            cmd_msg.angular.z = 3.0;   // 转向角速度0.1rad/s（缓慢右转）
+            cmd_msg.linear.x = 0.5;    // 前进速度0.2m/s
+            cmd_msg.linear.y = 0.5;    // 横向速度0
+            cmd_msg.angular.z = 0.0;   // 转向角速度0.1rad/s（缓慢右转）
 
             // 发布消息
             cmd_vel_pub_.publish(cmd_msg);
