@@ -1,14 +1,13 @@
 sentry_chassis_controller:
   pid:
-    p_wheel: 1.0
-    i_wheel: 0.1
-    d_wheel: 0.05
+    p_wheel: 0.5
+    i_wheel: 0.005
+    d_wheel: 0.0
     i_max_wheel: 1.0
     i_min_wheel: -1.0
-    p_: 1.0
-    i_: 0.1
-    d_: 0.05
+    p_: 0.5
+    i_: 0.005
+    d_: 0.0
     i_max_: 1.0
     i_min_: -1.0
-    chassis_speed : 8.0
 

@@ -12,7 +12,12 @@
 #include <control_toolbox/pid.h>
 #include <cmath>
 #include <ros/time.h>
-//#include <sentry_chassis_controller/SentryChassisParamsConfig.h>
+#include <sentry_chassis_controller/SentryChassisParamsConfig.h>
+#include <dynamic_reconfigure/server.h>
+#include "nav_msgs/Odometry.h"
+#include "tf2/LinearMath/Quaternion.h"
+#include "tf2_ros/transform_broadcaster.h"
+#include "geometry_msgs/TransformStamped.h"
 
 namespace sentry_chassis_controller {
 class SentryChassisController : public controller_interface ::Controller<hardware_interface::EffortJointInterface>{
@@ -25,8 +30,6 @@ public:
 
     void update(const ros::Time &time, const ros::Duration &Period) override;
 
-
-    //void  reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level);
 
 
     hardware_interface::JointHandle front_left_pivot_joint_, front_right_pivot_joint_, back_left_pivot_joint_, back_right_pivot_joint_;
@@ -47,9 +50,17 @@ private:
     ros::Time last_publish_time_;   // 上一次发布时间
     ros::Duration publish_interval_;// 发布间隔（默认0.1秒=10Hz）
 
+    ros::Publisher odom_pub_;
+    tf2_ros::TransformBroadcaster tf_broadcaster_;
+    double x_, y_, yaw_;  // 里程计坐标和航向角
+    ros::Time last_update_time_;
+
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
-    //dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig> dyn_srv_;
-    //bool params_initialized_ = false;
+
+    boost::shared_ptr<dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>> dyn_reconfig_server_;
+    dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>::CallbackType dyn_reconfig_callback_;
+
+    void reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level);
 };
 }
 
