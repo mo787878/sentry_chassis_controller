@@ -7,6 +7,8 @@
 
 namespace sentry_chassis_controller {
 
+    SentryChassisController::SentryChassisController()
+            : tf_listener_(tf_buffer_) {}
     bool SentryChassisController::init(hardware_interface::EffortJointInterface *effort_joint_interface,
                                        ros::NodeHandle &root_nh, ros::NodeHandle &controller_nh) {
 
@@ -83,9 +85,52 @@ namespace sentry_chassis_controller {
         yaw_ = 0.0;
         last_update_time_ = ros::Time::now();
 
+        // 读取速度控制模式参数
+        controller_nh.param("use_global_vel_mode", use_global_vel_mode_, true);
+        // 输出模式信息
+        if (use_global_vel_mode_) {
+            ROS_INFO("使用全局坐标系速度模式");
+        } else {
+            ROS_INFO("使用底盘坐标系速度模式");
+        }
+
         return true;
+
     }
 
+    geometry_msgs::Twist SentryChassisController::transformGlobalToBase(const geometry_msgs::Twist& global_twist, const ros::Time& time) {
+        geometry_msgs::Twist base_twist = global_twist;  // 默认返回原速度
+
+        try {
+            // 获取从控制坐标系到底盘坐标系的变换
+            geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
+                    "base_link", "odom", time, ros::Duration(0.1));
+
+            // 提取旋转分量(仅yaw角)
+            tf2::Quaternion q(
+                    transform.transform.rotation.x,
+                    transform.transform.rotation.y,
+                    transform.transform.rotation.z,
+                    transform.transform.rotation.w);
+            tf2::Matrix3x3 m(q);
+            double roll, pitch, yaw;
+            m.getRPY(roll, pitch, yaw);
+
+            // 应用坐标变换: 世界坐标系 -> 底盘坐标系
+            // 仅考虑平面运动(x, y, yaw)
+            double vx = global_twist.linear.x * cos(yaw) + global_twist.linear.y * sin(yaw);
+            double vy = global_twist.linear.y * cos(yaw) - global_twist.linear.x * sin(yaw);
+
+            base_twist.linear.x = vx;
+            base_twist.linear.y = vy;
+            // 角速度不需要变换，因为是绕z轴的旋转
+
+        } catch (tf2::TransformException &ex) {
+            ROS_WARN_THROTTLE(1.0, "无法获取TF变换: %s", ex.what());
+        }
+
+        return base_twist;
+    }
     void SentryChassisController::reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level) {
         // 1. 更新舵机PID参数：调用setGains(p, i, d, i_max, i_min, antiwindup=true)
         // control_toolbox::Pid的setGains参数顺序：p, i, d, i_max, i_min, antiwindup
@@ -108,7 +153,15 @@ namespace sentry_chassis_controller {
                  config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel);
     }
     void SentryChassisController::cmdVelCallback(const geometry_msgs::Twist::ConstPtr &msg) {
-        cmd_vel_ = *msg;
+        if (use_global_vel_mode_) {
+            // 全局速度模式：转换到底盘坐标系
+            ros::Time current_time = ros::Time::now();
+            cmd_vel_ = transformGlobalToBase(*msg, current_time);
+        } else {
+            // 底盘速度模式：直接使用原始指令
+            cmd_vel_ = *msg;
+        }
+
         static ros::Time last_log_time = ros::Time::now();
         if ((ros::Time::now() - last_log_time).toSec() > 1.0) {
             setlocale(LC_ALL,"");
@@ -122,9 +175,9 @@ namespace sentry_chassis_controller {
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 1.5;    // 前进速度0.2m/s
+            cmd_msg.linear.x = 0.0;    // 前进速度0.2m/s
             cmd_msg.linear.y = 0.0;    // 横向速度0
-            cmd_msg.angular.z = 0.0;   // 转向角速度0.1rad/s（缓慢右转）
+            cmd_msg.angular.z = 3.0;   // 转向角速度0.1rad/s（缓慢右转）
 
             // 发布消息
             cmd_vel_pub_.publish(cmd_msg);
@@ -134,9 +187,6 @@ namespace sentry_chassis_controller {
             // 更新发布时间
             last_publish_time_ = time;
         }
-
-
-
 
             double vx = cmd_vel_.linear.x;    // 前进/后退速度（x轴，m/s）
             double vy = cmd_vel_.linear.y;    // 左右平移速度（y轴，m/s）

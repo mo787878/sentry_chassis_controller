@@ -18,11 +18,17 @@
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2_ros/transform_broadcaster.h"
 #include "geometry_msgs/TransformStamped.h"
+#include <tf/transform_listener.h>
+#include <tf2_ros/buffer.h>
+#include <geometry_msgs/PointStamped.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+
 
 namespace sentry_chassis_controller {
 class SentryChassisController : public controller_interface ::Controller<hardware_interface::EffortJointInterface>{
 public:
-    SentryChassisController() = default;
+    SentryChassisController();
     ~SentryChassisController() override = default;
 
     bool init(hardware_interface::EffortJointInterface* effortJointInterface,
@@ -55,13 +61,19 @@ private:
     double x_, y_, yaw_;  // 里程计坐标和航向角
     ros::Time last_update_time_;
 
+    tf2_ros::Buffer tf_buffer_;                // TF缓冲区
+    tf2_ros::TransformListener tf_listener_;   // TF监听器
+    bool use_global_vel_mode_;                 // 全局坐标系速度模式开关
+
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
     boost::shared_ptr<dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>> dyn_reconfig_server_;
     dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>::CallbackType dyn_reconfig_callback_;
 
     void reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level);
+    geometry_msgs::Twist transformGlobalToBase(const geometry_msgs::Twist& global_twist, const ros::Time& time);
 };
-}
+};
+
 
 #endif //SENTRY_CHASSIS_CONTROLLER_SENTRY_CHASSIS_CONTROLLER_H
