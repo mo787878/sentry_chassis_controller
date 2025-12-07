@@ -65,13 +65,23 @@ private:
     tf2_ros::TransformListener tf_listener_;   // TF监听器
     bool use_global_vel_mode_;                 // 全局坐标系速度模式开关
 
+    double max_linear_accel_;  // 最大线加速度 (m/s²)
+    double max_angular_accel_; // 最大角加速度 (rad/s²)
+
+    double last_vx_cmd_;
+    double last_vy_cmd_;
+    double last_wz_cmd_;
+
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
     boost::shared_ptr<dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>> dyn_reconfig_server_;
     dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>::CallbackType dyn_reconfig_callback_;
 
     void reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level);
+
     geometry_msgs::Twist transformGlobalToBase(const geometry_msgs::Twist& global_twist, const ros::Time& time);
+
+    double limitAcceleration(double target, double current, double max_accel, double dt);
 };
 };
 
