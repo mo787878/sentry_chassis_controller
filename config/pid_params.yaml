@@ -14,6 +14,7 @@ sentry_chassis_controller:
     use_global_vel_mode : true
     max_linear_accel: 0.5    # 最大线加速度（m/s²）
     max_angular_accel: 0.8   # 最大角加速度（rad/s²）
+    cmd_timeout: 0.5
 
 
 

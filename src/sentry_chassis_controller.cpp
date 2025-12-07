@@ -106,6 +106,10 @@ namespace sentry_chassis_controller {
         ROS_INFO("加速度限制参数: 线加速度=%.2f m/s², 角加速度=%.2f rad/s²",
                  max_linear_accel_, max_angular_accel_);
 
+        controller_nh.param("other/cmd_timeout", cmd_timeout_, 0.5);  // 默认0.5秒超时
+        last_cmd_time_ = ros::Time::now();
+        is_locked_ = false;
+        ROS_INFO("自锁参数初始化：超时时间=%.2f秒", cmd_timeout_);
         return true;
 
     }
@@ -165,6 +169,8 @@ namespace sentry_chassis_controller {
                  config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel);
     }
     void SentryChassisController::cmdVelCallback(const geometry_msgs::Twist::ConstPtr &msg) {
+        last_cmd_time_ = ros::Time::now();  // 更新最后指令时间
+        is_locked_ = false;  // 收到指令，退出自锁模式
         if (use_global_vel_mode_) {
             // 全局速度模式：转换到底盘坐标系
             ros::Time current_time = ros::Time::now();
@@ -202,7 +208,7 @@ namespace sentry_chassis_controller {
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 1.0;    // 前进速度0.2m/s
+            cmd_msg.linear.x = 0.0;    // 前进速度0.2m/s
             cmd_msg.linear.y = 0.0;    // 横向速度0
             cmd_msg.angular.z = 0.0;   // 转向角速度0.1rad/s（缓慢右转）
 
@@ -213,6 +219,45 @@ namespace sentry_chassis_controller {
 
             // 更新发布时间
             last_publish_time_ = time;
+        }
+        double dt_since_last_cmd = (time - last_cmd_time_).toSec();
+        if (dt_since_last_cmd > cmd_timeout_ ||
+            (cmd_vel_.linear.x == 0 && cmd_vel_.linear.y == 0 && cmd_vel_.angular.z == 0)) {
+            is_locked_ = true;
+        } else {
+            is_locked_ = false;
+        }
+
+        if (is_locked_) {
+            double fl_angle_locked = (3 * M_PI) / 4 ;
+            double fr_angle_locked = (1 * M_PI) / 4 ;
+            double bl_angle_locked = (1 * M_PI) / 4 ;
+            double br_angle_locked = (3 * M_PI) / 4 ;
+            // 自锁模式：固定舵机角度为0，轮速为0
+            double target_vel_locked = 0.0;    // 零速度
+
+            // 舵机锁定（目标角度）
+            front_left_pivot_joint_.setCommand(
+                    pid_lf_.computeCommand(fl_angle_locked - front_left_pivot_joint_.getPosition(), period));
+            front_right_pivot_joint_.setCommand(
+                    pid_rf_.computeCommand(fr_angle_locked - front_right_pivot_joint_.getPosition(), period));
+            back_left_pivot_joint_.setCommand(
+                    pid_lb_.computeCommand(bl_angle_locked - back_left_pivot_joint_.getPosition(), period));
+            back_right_pivot_joint_.setCommand(
+                    pid_rb_.computeCommand(br_angle_locked - back_right_pivot_joint_.getPosition(), period));
+
+            // 轮速锁定（目标速度0）
+            front_left_wheel_joint_.setCommand(
+                    pid_lf_wheel_.computeCommand(target_vel_locked - front_left_wheel_joint_.getVelocity(), period));
+            front_right_wheel_joint_.setCommand(
+                    pid_rf_wheel_.computeCommand(target_vel_locked - front_right_wheel_joint_.getVelocity(), period));
+            back_left_wheel_joint_.setCommand(
+                    pid_lb_wheel_.computeCommand(target_vel_locked - back_left_wheel_joint_.getVelocity(), period));
+            back_right_wheel_joint_.setCommand(
+                    pid_rb_wheel_.computeCommand(target_vel_locked - back_right_wheel_joint_.getVelocity(), period));
+
+            ROS_DEBUG_THROTTLE(1.0, "处于自锁状态");
+            return;  // 跳过正常运动控制逻辑
         }
 
             double vx = cmd_vel_.linear.x;    // 前进/后退速度（x轴，m/s）

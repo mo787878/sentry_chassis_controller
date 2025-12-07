@@ -72,6 +72,11 @@ private:
     double last_vy_cmd_;
     double last_wz_cmd_;
 
+    ros::Time last_cmd_time_;  // 最后接收速度指令的时间
+    double cmd_timeout_;       // 超时阈值（秒），超过此时间判定为无命令
+    bool is_locked_;           // 是否处于自锁状态
+
+
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
     boost::shared_ptr<dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>> dyn_reconfig_server_;
