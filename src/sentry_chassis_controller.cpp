@@ -53,7 +53,7 @@ namespace sentry_chassis_controller {
         controller_nh.param("pid/i_max_wheel", i_max_wheel, 1.0);
         controller_nh.param("pid/i_min_wheel", i_min_wheel, -1.0);
 
-        controller_nh.param("pid/p_", p_, 0.3);
+        controller_nh.param("pid/p_", p_, 0.1);
         controller_nh.param("pid/i_", i_, 0.005);
         controller_nh.param("pid/d_", d_, 0.1);
         controller_nh.param("pid/i_max_", i_max_, 1.0);
@@ -86,6 +86,7 @@ namespace sentry_chassis_controller {
         y_ = 0.0;
         yaw_ = 0.0;
         last_update_time_ = ros::Time::now();
+        SentryChassisController::PublishTF(last_update_time_);
 
         // 读取速度控制模式参数
         controller_nh.param("other/use_global_vel_mode", use_global_vel_mode_, true);
@@ -106,10 +107,15 @@ namespace sentry_chassis_controller {
         ROS_INFO("加速度限制参数: 线加速度=%.2f m/s², 角加速度=%.2f rad/s²",
                  max_linear_accel_, max_angular_accel_);
 
-        controller_nh.param("other/cmd_timeout", cmd_timeout_, 0.5);  // 默认0.5秒超时
+        controller_nh.param("other/cmd_timeout", cmd_timeout_, 5.0);  // 默认5秒超时
         last_cmd_time_ = ros::Time::now();
         is_locked_ = false;
         ROS_INFO("自锁参数初始化：超时时间=%.2f秒", cmd_timeout_);
+
+        controller_nh.param("other/k1", k1, 0.5);
+        controller_nh.param("other/k2", k2, 0.5);
+        ROS_INFO("k1和k2参数获取成功");
+
         return true;
 
     }
@@ -120,7 +126,7 @@ namespace sentry_chassis_controller {
         try {
             // 获取从控制坐标系到底盘坐标系的变换
             geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
-                    "base_link", "odom", time, ros::Duration(0.1));
+                    "base_link", "odom", ros::Time(0), ros::Duration(2.0));
 
             // 提取旋转分量(仅yaw角)
             tf2::Quaternion q(
@@ -188,11 +194,55 @@ namespace sentry_chassis_controller {
             last_log_time = ros::Time::now();
         }
     }
+    void SentryChassisController::PublishTF(ros::Time time){
+        geometry_msgs::TransformStamped transform_stamped;
+        transform_stamped.header.stamp = time;
+        transform_stamped.header.frame_id = "odom";
+        transform_stamped.child_frame_id = "base_link";
+        transform_stamped.transform.translation.x = x_;
+        transform_stamped.transform.translation.y = y_;
+        transform_stamped.transform.translation.z = 0.0;
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, yaw_);
+        transform_stamped.transform.rotation.x = q.x();
+        transform_stamped.transform.rotation.y = q.y();
+        transform_stamped.transform.rotation.z = q.z();
+        transform_stamped.transform.rotation.w = q.w();
 
-    double SentryChassisController::limitAcceleration(double target, double current, double max_accel, double dt) {
-        if (dt <= 0.0) return current;
+        tf_broadcaster_.sendTransform(transform_stamped);
+    }
 
-        double max_delta = max_accel * dt;  // 允许的最大速度变化量
+    void SentryChassisController::PublishOdometry(ros::Time time, double vx_get, double vy_get, double wz_get) {
+        nav_msgs::Odometry odom_msg;
+        odom_msg.header.stamp = time;
+        odom_msg.header.frame_id = "odom";
+        odom_msg.child_frame_id = "base_link";
+
+        // 设置位置
+        odom_msg.pose.pose.position.x = x_;
+        odom_msg.pose.pose.position.y = y_;
+        odom_msg.pose.pose.position.z = 0.0;
+
+        // 设置姿态（仅yaw有值，转换为四元数）
+        tf2::Quaternion q;
+        q.setRPY(0.0, 0.0, yaw_);
+        odom_msg.pose.pose.orientation.x = q.x();
+        odom_msg.pose.pose.orientation.y = q.y();
+        odom_msg.pose.pose.orientation.z = q.z();
+        odom_msg.pose.pose.orientation.w = q.w();
+
+        // 设置速度
+        odom_msg.twist.twist.linear.x = vx_get;
+        odom_msg.twist.twist.linear.y = vy_get;
+        odom_msg.twist.twist.angular.z = wz_get;
+
+        odom_pub_.publish(odom_msg);
+    }
+    double SentryChassisController::limitAcceleration(double target, double current, double max_accel, double dt_) {
+        if (dt_ <= 0.0)
+            return current;
+
+        double max_delta = max_accel * dt_;  // 允许的最大速度变化量
         double delta = target - current;
 
         // 限制速度变化量在[-max_delta, max_delta]范围内
@@ -204,13 +254,14 @@ namespace sentry_chassis_controller {
             return target;
         }
     }
+
     void SentryChassisController::update(const ros::Time &time, const ros::Duration &period) {
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 0.0;    // 前进速度0.2m/s
+            cmd_msg.linear.x = 5.0;    // 前进速度0.2m/s
             cmd_msg.linear.y = 0.0;    // 横向速度0
-            cmd_msg.angular.z = 0.0;   // 转向角速度0.1rad/s（缓慢右转）
+            cmd_msg.angular.z = 0.0;   //角速度0.1rad/s（缓慢右转）
 
             // 发布消息
             cmd_vel_pub_.publish(cmd_msg);
@@ -316,18 +367,70 @@ namespace sentry_chassis_controller {
             double fr_target_vel = fr_linear / wheel_radius_;
             double bl_target_vel = bl_linear / wheel_radius_;
             double br_target_vel = br_linear / wheel_radius_;
+/*
+            double term1 = fabs(fl_target_vel * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)) +
+                          fabs(fr_target_vel * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)) +
+                          fabs(bl_target_vel * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)) +
+                          fabs(br_target_vel * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
+
+            double term2 = k1*(pow(pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period), 2) +
+                               pow(pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period),2) +
+                               pow(pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period), 2) +
+                               pow(pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period), 2));
+
+            double term3 = k2*(pow(fl_target_vel,2) +
+                               pow(fr_target_vel,2) +
+                               pow(bl_target_vel,2) +
+                               pow(br_target_vel,2));
+
+            double term4 = fabs(front_left_wheel_joint_.getVelocity() * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)) +
+                           fabs(front_right_wheel_joint_.getVelocity() * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)) +
+                           fabs(back_left_wheel_joint_.getVelocity() * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)) +
+                           fabs(back_right_wheel_joint_.getVelocity() * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
+
+            double term5 = pow(front_left_wheel_joint_.getVelocity() * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period),2) +
+                           pow(front_right_wheel_joint_.getVelocity() * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period),2) +
+                           pow(back_left_wheel_joint_.getVelocity() * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period),2) +
+                           pow(back_right_wheel_joint_.getVelocity() * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period),2);
+
+            double term6 = k2*(pow(front_left_wheel_joint_.getVelocity(),2) +
+                           pow(front_right_pivot_joint_.getPosition(),2) +
+                           pow(back_left_wheel_joint_.getVelocity(),2) +
+                           pow(back_right_wheel_joint_.getVelocity(),2));
+
+            double k = (-term4 + sqrt(term5 - 4 * term2 * (term6 - P_max))) / (2 * term2);
+            double P_in = term1 + term2 +term3;
+            if(P_in >= P_max){
+                front_left_wheel_joint_.setCommand(
+                        (k * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)));
+                front_right_wheel_joint_.setCommand(
+                        (k * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)));
+                back_left_wheel_joint_.setCommand(
+                        (k * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)));
+                back_right_wheel_joint_.setCommand(
+                        (k * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period)));
+            }else{
+                front_left_wheel_joint_.setCommand(
+                        pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period));
+                front_right_wheel_joint_.setCommand(
+                        pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period));
+                back_left_wheel_joint_.setCommand(
+                        pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period));
+                back_right_wheel_joint_.setCommand(
+                        pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
+            }
+*/
 
             // 第五步：控制指令下发——轮机（转速控制）+ 舵机（角度控制）
             // 1. 轮机控制（原有逻辑，不变）
-            front_left_wheel_joint_.setCommand(
-                    pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period));
-            front_right_wheel_joint_.setCommand(
-                    pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period));
-            back_left_wheel_joint_.setCommand(
-                    pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period));
-            back_right_wheel_joint_.setCommand(
-                    pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
-
+        front_left_wheel_joint_.setCommand(
+                pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period));
+        front_right_wheel_joint_.setCommand(
+                pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period));
+        back_left_wheel_joint_.setCommand(
+                pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period));
+        back_right_wheel_joint_.setCommand(
+                pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
             // 2. 舵机控制（新增逻辑：跟踪目标转向角）
             front_left_pivot_joint_.setCommand(
                     pid_lf_.computeCommand(fl_angle - front_left_pivot_joint_.getPosition(), period));
@@ -401,46 +504,10 @@ namespace sentry_chassis_controller {
         y_ += dy;  // 更新y坐标
 
         // 7. 发布Odometry消息
-        nav_msgs::Odometry odom_msg;
-        odom_msg.header.stamp = time;
-        odom_msg.header.frame_id = "odom";
-        odom_msg.child_frame_id = "base_link";
-
-        // 设置位置
-        odom_msg.pose.pose.position.x = x_;
-        odom_msg.pose.pose.position.y = y_;
-        odom_msg.pose.pose.position.z = 0.0;
-
-        // 设置姿态（仅yaw有值，转换为四元数）
-        tf2::Quaternion q;
-        q.setRPY(0.0, 0.0, yaw_);
-        odom_msg.pose.pose.orientation.x = q.x();
-        odom_msg.pose.pose.orientation.y = q.y();
-        odom_msg.pose.pose.orientation.z = q.z();
-        odom_msg.pose.pose.orientation.w = q.w();
-
-        // 设置速度
-        odom_msg.twist.twist.linear.x = vx_get;
-        odom_msg.twist.twist.linear.y = vy_get;
-        odom_msg.twist.twist.angular.z = wz_get;
-
-        odom_pub_.publish(odom_msg);
+        PublishOdometry(time, vx_get, vy_get, wz_get);
 
         // 8. 发布tf变换（odom -> base_link）
-        geometry_msgs::TransformStamped transform_stamped;
-        transform_stamped.header.stamp = time;
-        transform_stamped.header.frame_id = "odom";
-        transform_stamped.child_frame_id = "base_link";
-
-        transform_stamped.transform.translation.x = x_;
-        transform_stamped.transform.translation.y = y_;
-        transform_stamped.transform.translation.z = 0.0;
-        transform_stamped.transform.rotation.x = q.x();
-        transform_stamped.transform.rotation.y = q.y();
-        transform_stamped.transform.rotation.z = q.z();
-        transform_stamped.transform.rotation.w = q.w();
-
-        tf_broadcaster_.sendTransform(transform_stamped);
+        PublishTF(time);
 
         last_update_time_ = time;
     }

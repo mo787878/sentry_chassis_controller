@@ -39,8 +39,7 @@ public:
 
 
     hardware_interface::JointHandle front_left_pivot_joint_, front_right_pivot_joint_, back_left_pivot_joint_, back_right_pivot_joint_;
-    hardware_interface::JointHandle front_left_wheel_joint_, front_right_wheel_joint_,
-                                    back_left_wheel_joint_, back_right_wheel_joint_;
+    hardware_interface::JointHandle front_left_wheel_joint_, front_right_wheel_joint_, back_left_wheel_joint_, back_right_wheel_joint_;
 private:
     ros::Time last_change_;
     double wheel_track_;
@@ -76,6 +75,9 @@ private:
     double cmd_timeout_;       // 超时阈值（秒），超过此时间判定为无命令
     bool is_locked_;           // 是否处于自锁状态
 
+    double k1;
+    double k2;
+    double P_max = 10;
 
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
@@ -87,6 +89,10 @@ private:
     geometry_msgs::Twist transformGlobalToBase(const geometry_msgs::Twist& global_twist, const ros::Time& time);
 
     double limitAcceleration(double target, double current, double max_accel, double dt);
+
+    void PublishTF(ros::Time time);
+    void PublishOdometry(ros::Time time, double vx_get, double vy_get, double wz_get);
+
 };
 };
 

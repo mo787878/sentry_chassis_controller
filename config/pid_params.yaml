@@ -5,7 +5,7 @@ sentry_chassis_controller:
     d_wheel: 0.0
     i_max_wheel: 1.0
     i_min_wheel: -1.0
-    p_: 0.3
+    p_: 0.1
     i_: 0.005
     d_: 0.1
     i_max_: 1.0
@@ -14,7 +14,10 @@ sentry_chassis_controller:
     use_global_vel_mode : true
     max_linear_accel: 0.5    # 最大线加速度（m/s²）
     max_angular_accel: 0.8   # 最大角加速度（rad/s²）
-    cmd_timeout: 0.5
+    cmd_timeout: 5.0
+    k1 : 0.5
+    k2 : 0.5
+    P_max : 10
 
 
 
