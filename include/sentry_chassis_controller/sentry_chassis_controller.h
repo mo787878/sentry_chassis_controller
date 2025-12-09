@@ -77,7 +77,7 @@ private:
 
     double k1;
     double k2;
-    double P_max = 10;
+    double P_max;
 
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
@@ -92,6 +92,7 @@ private:
 
     void PublishTF(ros::Time time);
     void PublishOdometry(ros::Time time, double vx_get, double vy_get, double wz_get);
+    double Compute_K(double fl_target_vel, double fr_target_vel, double bl_target_vel, double br_target_vel, ros::Duration period);
 
 };
 };

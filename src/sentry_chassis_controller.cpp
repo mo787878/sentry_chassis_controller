@@ -30,9 +30,9 @@ namespace sentry_chassis_controller {
         back_right_pivot_joint_ =
                 effort_joint_interface->getHandle("right_back_pivot_joint");
 
-        wheel_track_ = controller_nh.param("wheel_track", 0.362);
-        wheel_base_ = controller_nh.param("wheel_base", 0.362);
-        wheel_radius_ = controller_nh.param("wheel_radius", 0.07625);
+        wheel_track_ = controller_nh.param("other/wheel_track", 0.362);
+        wheel_base_ = controller_nh.param("other/wheel_base", 0.362);
+        wheel_radius_ = controller_nh.param("other/wheel_radius", 0.07625);
 
         cmd_vel_pub_ = root_nh.advertise<geometry_msgs::Twist>("/cmd_vel", 10, true);
         setlocale(LC_ALL,"");
@@ -53,8 +53,8 @@ namespace sentry_chassis_controller {
         controller_nh.param("pid/i_max_wheel", i_max_wheel, 1.0);
         controller_nh.param("pid/i_min_wheel", i_min_wheel, -1.0);
 
-        controller_nh.param("pid/p_", p_, 0.1);
-        controller_nh.param("pid/i_", i_, 0.005);
+        controller_nh.param("pid/p_", p_, 4.0);
+        controller_nh.param("pid/i_", i_, 0.0);
         controller_nh.param("pid/d_", d_, 0.1);
         controller_nh.param("pid/i_max_", i_max_, 1.0);
         controller_nh.param("pid/i_min_", i_min_, -1.0);
@@ -73,7 +73,7 @@ namespace sentry_chassis_controller {
 
 
         last_publish_time_ = ros::Time::now();
-        publish_interval_ = ros::Duration(1.0);  // 发布频率1Hz（可调整）
+        publish_interval_ = ros::Duration(0.1);  // 发布频率10Hz（可调整）
 
         dyn_reconfig_callback_ = boost::bind(&SentryChassisController::reconfigureCallback, this, _1, _2);
         dyn_reconfig_server_.reset(new dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>(controller_nh));
@@ -89,7 +89,7 @@ namespace sentry_chassis_controller {
         SentryChassisController::PublishTF(last_update_time_);
 
         // 读取速度控制模式参数
-        controller_nh.param("other/use_global_vel_mode", use_global_vel_mode_, true);
+        controller_nh.param<bool>("other/use_global_vel_mode", use_global_vel_mode_, false);
         // 输出模式信息
         if (use_global_vel_mode_) {
             ROS_INFO("使用全局坐标系速度模式");
@@ -97,8 +97,8 @@ namespace sentry_chassis_controller {
             ROS_INFO("使用底盘坐标系速度模式");
         }
 
-        controller_nh.param("max_linear_accel", max_linear_accel_, 1.0);  // 默认1m/s²
-        controller_nh.param("max_angular_accel", max_angular_accel_, 1.0); // 默认1rad/s²
+        controller_nh.param<double>("other/max_linear_accel", max_linear_accel_, 5.0);  // 默认1m/s²
+        controller_nh.param<double>("other/max_angular_accel", max_angular_accel_, 5.0); // 默认1rad/s²
 
         last_vx_cmd_ = 0.0;
         last_vy_cmd_ = 0.0;
@@ -107,14 +107,15 @@ namespace sentry_chassis_controller {
         ROS_INFO("加速度限制参数: 线加速度=%.2f m/s², 角加速度=%.2f rad/s²",
                  max_linear_accel_, max_angular_accel_);
 
-        controller_nh.param("other/cmd_timeout", cmd_timeout_, 5.0);  // 默认5秒超时
+        controller_nh.param<double>("other/cmd_timeout", cmd_timeout_, 5.0);  // 默认5秒超时
         last_cmd_time_ = ros::Time::now();
         is_locked_ = false;
         ROS_INFO("自锁参数初始化：超时时间=%.2f秒", cmd_timeout_);
 
-        controller_nh.param("other/k1", k1, 0.5);
-        controller_nh.param("other/k2", k2, 0.5);
-        ROS_INFO("k1和k2参数获取成功");
+        controller_nh.param<double>("other/k1", k1, 0.1);
+        controller_nh.param<double>("other/k2", k2, 0.1);
+        controller_nh.param<double>("other/P_max", P_max, 100.0);
+        ROS_INFO("功率控制相关参数获取成功");
 
         return true;
 
@@ -255,11 +256,56 @@ namespace sentry_chassis_controller {
         }
     }
 
+    double SentryChassisController::Compute_K(double fl_target_vel, double fr_target_vel, double bl_target_vel, double br_target_vel, ros::Duration period){
+        double tau_fl = pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period);
+        double tau_fr = pid_rf_wheel_.computeCommand(fr_target_vel - front_right_pivot_joint_.getVelocity(), period);
+        double tau_bl = pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period);
+        double tau_br = pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period);
+// 2. 获取各电机当前转速
+        double omega_fl = front_left_wheel_joint_.getVelocity();
+        double omega_fr = front_right_wheel_joint_.getVelocity();
+        double omega_bl = back_left_wheel_joint_.getVelocity();
+        double omega_br = back_right_wheel_joint_.getVelocity();
+
+        double sum_tau_omega = fabs(tau_fl * omega_fl) + fabs(tau_fr * omega_fr) +
+                               fabs(tau_bl * omega_bl) + fabs(tau_br * omega_br);
+
+        double sum_tau_sq = pow(tau_fl, 2) + pow(tau_fr, 2) + pow(tau_bl, 2) + pow(tau_br, 2);
+
+        double sum_omega_sq = pow(omega_fl, 2) + pow(omega_fr, 2) + pow(omega_bl, 2) + pow(omega_br, 2);
+
+        double total_power = k1 * sum_tau_sq + k2 * sum_omega_sq;
+        double K = 1.0;
+        if (total_power > P_max) {
+            // 5. 按照文档公式(3.22)计算缩放因子k
+            double numerator_part = -sum_tau_omega;
+            double sqrt_part = sqrt(pow(sum_tau_omega, 2) - 4 * k1 * sum_tau_sq * (k2 * sum_omega_sq - P_max));
+            double denominator = 2 * k1 * sum_tau_sq;
+
+            // 处理数值计算异常
+            if (denominator == 0) {
+                ROS_ERROR("功率控制计算错误：分母为零");
+                K = 1.0;
+            } else if (sqrt_part != sqrt_part) {  // 检查是否为NaN
+                ROS_WARN("功率控制：根号内为负数");
+                K = 1.0;
+            } else {
+                K = (numerator_part + sqrt_part) / denominator;
+            }
+
+            // 确保缩放因子合理
+            if (K <= 0 || K > 1.0) {
+                ROS_WARN("缩放因子异常，使用安全值");
+                K = 1;
+            }
+        }
+        return K;
+    }
     void SentryChassisController::update(const ros::Time &time, const ros::Duration &period) {
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 5.0;    // 前进速度0.2m/s
+            cmd_msg.linear.x = 1.0;    // 前进速度0.2m/s
             cmd_msg.linear.y = 0.0;    // 横向速度0
             cmd_msg.angular.z = 0.0;   //角速度0.1rad/s（缓慢右转）
 
@@ -367,71 +413,20 @@ namespace sentry_chassis_controller {
             double fr_target_vel = fr_linear / wheel_radius_;
             double bl_target_vel = bl_linear / wheel_radius_;
             double br_target_vel = br_linear / wheel_radius_;
-/*
-            double term1 = fabs(fl_target_vel * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)) +
-                          fabs(fr_target_vel * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)) +
-                          fabs(bl_target_vel * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)) +
-                          fabs(br_target_vel * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
 
-            double term2 = k1*(pow(pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period), 2) +
-                               pow(pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period),2) +
-                               pow(pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period), 2) +
-                               pow(pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period), 2));
-
-            double term3 = k2*(pow(fl_target_vel,2) +
-                               pow(fr_target_vel,2) +
-                               pow(bl_target_vel,2) +
-                               pow(br_target_vel,2));
-
-            double term4 = fabs(front_left_wheel_joint_.getVelocity() * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)) +
-                           fabs(front_right_wheel_joint_.getVelocity() * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)) +
-                           fabs(back_left_wheel_joint_.getVelocity() * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)) +
-                           fabs(back_right_wheel_joint_.getVelocity() * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
-
-            double term5 = pow(front_left_wheel_joint_.getVelocity() * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period),2) +
-                           pow(front_right_wheel_joint_.getVelocity() * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period),2) +
-                           pow(back_left_wheel_joint_.getVelocity() * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period),2) +
-                           pow(back_right_wheel_joint_.getVelocity() * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period),2);
-
-            double term6 = k2*(pow(front_left_wheel_joint_.getVelocity(),2) +
-                           pow(front_right_pivot_joint_.getPosition(),2) +
-                           pow(back_left_wheel_joint_.getVelocity(),2) +
-                           pow(back_right_wheel_joint_.getVelocity(),2));
-
-            double k = (-term4 + sqrt(term5 - 4 * term2 * (term6 - P_max))) / (2 * term2);
-            double P_in = term1 + term2 +term3;
-            if(P_in >= P_max){
-                front_left_wheel_joint_.setCommand(
-                        (k * pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)));
-                front_right_wheel_joint_.setCommand(
-                        (k * pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)));
-                back_left_wheel_joint_.setCommand(
-                        (k * pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)));
-                back_right_wheel_joint_.setCommand(
-                        (k * pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period)));
-            }else{
-                front_left_wheel_joint_.setCommand(
-                        pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period));
-                front_right_wheel_joint_.setCommand(
-                        pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period));
-                back_left_wheel_joint_.setCommand(
-                        pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period));
-                back_right_wheel_joint_.setCommand(
-                        pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
-            }
-*/
+            double k = Compute_K(fl_target_vel, fr_target_vel, bl_target_vel, br_target_vel, period);
 
             // 第五步：控制指令下发——轮机（转速控制）+ 舵机（角度控制）
             // 1. 轮机控制（原有逻辑，不变）
         front_left_wheel_joint_.setCommand(
-                pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period));
+                pid_lf_wheel_.computeCommand(k * (fl_target_vel - front_left_wheel_joint_.getVelocity()), period));
         front_right_wheel_joint_.setCommand(
-                pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period));
+                pid_rf_wheel_.computeCommand(k * (fr_target_vel - front_right_wheel_joint_.getVelocity()), period));
         back_left_wheel_joint_.setCommand(
-                pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period));
+                pid_lb_wheel_.computeCommand(k * (bl_target_vel - back_left_wheel_joint_.getVelocity()), period));
         back_right_wheel_joint_.setCommand(
-                pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period));
-            // 2. 舵机控制（新增逻辑：跟踪目标转向角）
+                pid_rb_wheel_.computeCommand(k * (br_target_vel - back_right_wheel_joint_.getVelocity()), period));
+             // 2. 舵机控制（新增逻辑：跟踪目标转向角）
             front_left_pivot_joint_.setCommand(
                     pid_lf_.computeCommand(fl_angle - front_left_pivot_joint_.getPosition(), period));
             front_right_pivot_joint_.setCommand(
