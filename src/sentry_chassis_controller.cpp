@@ -419,13 +419,13 @@ namespace sentry_chassis_controller {
             // 第五步：控制指令下发——轮机（转速控制）+ 舵机（角度控制）
             // 1. 轮机控制（原有逻辑，不变）
         front_left_wheel_joint_.setCommand(
-                pid_lf_wheel_.computeCommand(k * (fl_target_vel - front_left_wheel_joint_.getVelocity()), period));
+              k * (pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)));
         front_right_wheel_joint_.setCommand(
-                pid_rf_wheel_.computeCommand(k * (fr_target_vel - front_right_wheel_joint_.getVelocity()), period));
+              k * (pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period)));
         back_left_wheel_joint_.setCommand(
-                pid_lb_wheel_.computeCommand(k * (bl_target_vel - back_left_wheel_joint_.getVelocity()), period));
+              k * (pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)));
         back_right_wheel_joint_.setCommand(
-                pid_rb_wheel_.computeCommand(k * (br_target_vel - back_right_wheel_joint_.getVelocity()), period));
+              k * (pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period)));
              // 2. 舵机控制（新增逻辑：跟踪目标转向角）
             front_left_pivot_joint_.setCommand(
                     pid_lf_.computeCommand(fl_angle - front_left_pivot_joint_.getPosition(), period));
