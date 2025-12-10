@@ -125,28 +125,23 @@ namespace sentry_chassis_controller {
         geometry_msgs::Twist base_twist = global_twist;  // 默认返回原速度
 
         try {
-            // 获取从控制坐标系到底盘坐标系的变换
             geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
                     "base_link", "odom", ros::Time(0), ros::Duration(2.0));
+             // 2. 构造全局坐标系下的线速度向量（平面运动，z轴为0）
+            tf2::Vector3 global_vel(global_twist.linear.x, global_twist.linear.y, 0.0);
 
-            // 提取旋转分量(仅yaw角)
-            tf2::Quaternion q(
-                    transform.transform.rotation.x,
-                    transform.transform.rotation.y,
-                    transform.transform.rotation.z,
-                    transform.transform.rotation.w);
-            tf2::Matrix3x3 m(q);
-            double roll, pitch, yaw;
-            m.getRPY(roll, pitch, yaw);
+            // 3. 将ROS消息转为TF2原生Transform类型
+            tf2::Transform tf_transform;
+            tf2::fromMsg(transform.transform, tf_transform);
 
-            // 应用坐标变换: 世界坐标系 -> 底盘坐标系
-            // 仅考虑平面运动(x, y, yaw)
-            double vx = global_twist.linear.x * cos(yaw) + global_twist.linear.y * sin(yaw);
-            double vy = global_twist.linear.y * cos(yaw) - global_twist.linear.x * sin(yaw);
+            // tf2::Transform * tf2::Vector3 → 自动完成向量的旋转变换
+            tf2::Vector3 base_vel = tf_transform * global_vel;
 
-            base_twist.linear.x = vx;
-            base_twist.linear.y = vy;
-            // 角速度不需要变换，因为是绕z轴的旋转
+            // 4. 更新底盘速度
+            base_twist.linear.x = base_vel.x();
+            base_twist.linear.y = base_vel.y();
+            base_twist.angular.z = global_twist.angular.z;
+
 
         } catch (tf2::TransformException &ex) {
             ROS_WARN_THROTTLE(1.0, "无法获取TF变换: %s", ex.what());
@@ -301,7 +296,7 @@ namespace sentry_chassis_controller {
         }
         return K;
     }
-    void SentryChassisController::update(const ros::Time &time, const ros::Duration &period) {
+    void SentryChassisController::PublishCmdmsg(ros::Time time){
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
@@ -317,6 +312,10 @@ namespace sentry_chassis_controller {
             // 更新发布时间
             last_publish_time_ = time;
         }
+    }
+    void SentryChassisController::update(const ros::Time &time, const ros::Duration &period) {
+        //PublishCmdmsg(time);
+
         double dt_since_last_cmd = (time - last_cmd_time_).toSec();
         if (dt_since_last_cmd > cmd_timeout_ ||
             (cmd_vel_.linear.x == 0 && cmd_vel_.linear.y == 0 && cmd_vel_.angular.z == 0)) {
