@@ -34,15 +34,12 @@ namespace sentry_chassis_controller {
         wheel_base_ = controller_nh.param("other/wheel_base", 0.362);
         wheel_radius_ = controller_nh.param("other/wheel_radius", 0.07625);
 
-        cmd_vel_pub_ = root_nh.advertise<geometry_msgs::Twist>("/cmd_vel", 10, true);
+        cmd_vel_pub_ = root_nh.advertise<geometry_msgs::Twist>("/cmd_vel", 10);
         setlocale(LC_ALL,"");
         ROS_INFO("cmd_vel 发布者初始化成功！");
 
         cmd_vel_sub_ = root_nh.subscribe("/cmd_vel", 10, &SentryChassisController::cmdVelCallback, this);
-        if (!cmd_vel_sub_) {
-            ROS_ERROR("ERROR: /cmd_vel 订阅者创建失败！");
-            return false;
-        }
+        setlocale(LC_ALL,"");
         ROS_INFO("cmd_vel 订阅者初始化成功！正在监听话题...");
 
 
@@ -53,8 +50,8 @@ namespace sentry_chassis_controller {
         controller_nh.param("pid/i_max_wheel", i_max_wheel, 1.0);
         controller_nh.param("pid/i_min_wheel", i_min_wheel, -1.0);
 
-        controller_nh.param("pid/p_", p_, 4.0);
-        controller_nh.param("pid/i_", i_, 0.0);
+        controller_nh.param("pid/p_", p_, 0.5);
+        controller_nh.param("pid/i_", i_, 0.001);
         controller_nh.param("pid/d_", d_, 0.1);
         controller_nh.param("pid/i_max_", i_max_, 1.0);
         controller_nh.param("pid/i_min_", i_min_, -1.0);
@@ -89,7 +86,7 @@ namespace sentry_chassis_controller {
         SentryChassisController::PublishTF(last_update_time_);
 
         // 读取速度控制模式参数
-        controller_nh.param<bool>("other/use_global_vel_mode", use_global_vel_mode_, false);
+        controller_nh.param<bool>("other/use_global_vel_mode", use_global_vel_mode_);
         // 输出模式信息
         if (use_global_vel_mode_) {
             ROS_INFO("使用全局坐标系速度模式");
@@ -253,7 +250,7 @@ namespace sentry_chassis_controller {
 
     double SentryChassisController::Compute_K(double fl_target_vel, double fr_target_vel, double bl_target_vel, double br_target_vel, ros::Duration period){
         double tau_fl = pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period);
-        double tau_fr = pid_rf_wheel_.computeCommand(fr_target_vel - front_right_pivot_joint_.getVelocity(), period);
+        double tau_fr = pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period);
         double tau_bl = pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period);
         double tau_br = pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period);
 // 2. 获取各电机当前转速
@@ -300,22 +297,21 @@ namespace sentry_chassis_controller {
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
             // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 1.0;    // 前进速度0.2m/s
+            cmd_msg.linear.x = 0.0;    // 前进速度0.2m/s
             cmd_msg.linear.y = 0.0;    // 横向速度0
-            cmd_msg.angular.z = 0.0;   //角速度0.1rad/s（缓慢右转）
+            cmd_msg.angular.z = 6.0;   //角速度0.1rad/s（缓慢右转）
 
             // 发布消息
             cmd_vel_pub_.publish(cmd_msg);
             setlocale(LC_ALL,"");
-            ROS_DEBUG("主动发布 /cmd_vel 消息：vx=%.2f, wz=%.2f", cmd_msg.linear.x, cmd_msg.angular.z);
+            ROS_DEBUG("主动发布 /cmd_vel 消息：vx=%.2f, vy=%.2f，wz=%.2f", cmd_msg.linear.x,cmd_msg.linear.y ,cmd_msg.angular.z);
 
             // 更新发布时间
             last_publish_time_ = time;
         }
     }
     void SentryChassisController::update(const ros::Time &time, const ros::Duration &period) {
-        //PublishCmdmsg(time);
-
+        PublishCmdmsg(time);
         double dt_since_last_cmd = (time - last_cmd_time_).toSec();
         if (dt_since_last_cmd > cmd_timeout_ ||
             (cmd_vel_.linear.x == 0 && cmd_vel_.linear.y == 0 && cmd_vel_.angular.z == 0)) {
@@ -383,20 +379,20 @@ namespace sentry_chassis_controller {
             // -------------------------- 前左轮（fl） --------------------------
             // 1. 计算轮子的速度矢量（x、y方向分量）
             double fl_vx = limited_vx - limited_wz * half_wheel_track;   // 前左轮x方向速度分量
-            double fl_vy = limited_vy + limited_wz * half_wheel_base;  // 前左轮y方向速度分量（注意符号：左轮+，右轮-）
-            // 2. 计算舵机转向角：速度矢量与x轴的夹角（atan2(vy, vx)）
+            double fl_vy = limited_vy + limited_wz * half_wheel_base;  // 前左轮y方向速度分量
+            // 2. 计算舵机转向角
             fl_angle = atan2(fl_vy, fl_vx);  // 范围：[-π, π]，对应转向角（向左为正，向右为负）
-            // 3. 计算轮子线速度：速度矢量的模长（sqrt(vx²+vy²)）
+            // 3. 计算轮子线速度大小
             fl_linear = sqrt(pow(fl_vx, 2) + pow(fl_vy, 2));
 
             // -------------------------- 前右轮（fr） --------------------------
             double fr_vx = limited_vx + limited_wz * half_wheel_track;
-            double fr_vy = limited_vy + limited_wz * half_wheel_base;  // 右轮vy分量符号为负
+            double fr_vy = limited_vy + limited_wz * half_wheel_base;
             fr_angle = atan2(fr_vy, fr_vx);
             fr_linear = sqrt(pow(fr_vx, 2) + pow(fr_vy, 2));
 
             // -------------------------- 后左轮（bl） --------------------------
-            double bl_vx = limited_vx - limited_wz * half_wheel_track;   // 后轮vx分量符号与前轮相反
+            double bl_vx = limited_vx - limited_wz * half_wheel_track;
             double bl_vy = limited_vy - limited_wz * half_wheel_base;
             bl_angle = atan2(bl_vy, bl_vx);
             bl_linear = sqrt(pow(bl_vx, 2) + pow(bl_vy, 2));
@@ -415,7 +411,7 @@ namespace sentry_chassis_controller {
 
             double k = Compute_K(fl_target_vel, fr_target_vel, bl_target_vel, br_target_vel, period);
 
-            // 第五步：控制指令下发——轮机（转速控制）+ 舵机（角度控制）
+
             // 1. 轮机控制（原有逻辑，不变）
         front_left_wheel_joint_.setCommand(
               k * (pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)));
@@ -472,19 +468,10 @@ namespace sentry_chassis_controller {
         double vx_get = (fl_vx_get + fr_vx_get + bl_vx_get + br_vx_get) / 4.0;  // 机体x方向速度
         double vy_get = (fl_vy_get + fr_vy_get + bl_vy_get + br_vy_get) / 4.0;  // 机体y方向速度
 
-        // 5. 计算角速度（基于轮子速度差）
-        // 前轴平均速度
-        double front_v_get = (fl_linear_get + fr_linear_get) / 2.0;
-        // 后轴平均速度
-        double rear_v_get = (bl_linear_get + br_linear_get) / 2.0;
-        // 左右轮平均速度差
-        double left_v_get = (fl_linear_get + bl_linear_get) / 2.0;
-        double right_v_get = (fr_linear_get + br_linear_get) / 2.0;
 
-        // 合成角速度（取两种计算方式的平均值提高精度）
-        double wz1_get = (rear_v_get - front_v_get) / wheel_base_;               // 前后轴速度差计算
-        double wz2_get = (right_v_get - left_v_get) / wheel_track_;              // 左右轮速度差计算
-        double wz_get = (wz1_get + wz2_get) / 2.0;                               // 角速度平均值
+        // 合成角速度
+        double wz_get = (-fl_vx_get + fl_vy_get + fr_vx_get + fr_vy_get - bl_vx_get -
+                         bl_vy_get + br_vx_get - br_vy_get) * wheel_radius_ / (4 * wheel_track_);
 
         // 6. 积分计算里程计位置和航向
         double dt_sec = dt.toSec();
