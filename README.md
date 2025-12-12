@@ -14,7 +14,7 @@
 
 1.[Robot Operating System (ROS)](http://wiki.ros.org) (middleware for robotics)
 
-2.[rm_description_for_task 任务的描述](https://github.com/Whathelp233/rm_description_for_task)
+2.[rm_description_for_task 任务的描述](https://github.com/Whathelp233/rm_description_for_task.git)
 
 3.controller_interface
 
@@ -22,7 +22,7 @@
 
 5.pluginlib
 
-6.[chassis_teleop](https://github.com/mo787878/the-final-task.git)
+6.[chassis_teleop](https://github.com/mo787878/chassis_teleop.git)
 
 
 
