@@ -70,7 +70,7 @@ namespace sentry_chassis_controller {
 
 
         last_publish_time_ = ros::Time::now();
-        publish_interval_ = ros::Duration(0.1);  // 发布频率10Hz（可调整）
+        publish_interval_ = ros::Duration(0.1); //速度发布者发布频率
 
         dyn_reconfig_callback_ = boost::bind(&SentryChassisController::reconfigureCallback, this, _1, _2);
         dyn_reconfig_server_.reset(new dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>(controller_nh));
@@ -85,9 +85,7 @@ namespace sentry_chassis_controller {
         last_update_time_ = ros::Time::now();
         SentryChassisController::PublishTF(last_update_time_);
 
-        // 读取速度控制模式参数
         controller_nh.param<bool>("other/use_global_vel_mode", use_global_vel_mode_);
-        // 输出模式信息
         if (use_global_vel_mode_) {
             ROS_INFO("使用全局坐标系速度模式");
         } else {
@@ -114,12 +112,19 @@ namespace sentry_chassis_controller {
         controller_nh.param<double>("other/P_max", P_max, 100.0);
         ROS_INFO("功率控制相关参数获取成功");
 
+        filtered_vx_ = 0.0;
+        filtered_vy_ = 0.0;
+        filtered_wz_ = 0.0;
+        alpha_ = 0.01;
         return true;
 
     }
 
+    double SentryChassisController::lowPassFilter(double current, double filtered, double alpha) {
+        return alpha * current + (1 - alpha) * filtered;
+    }
     geometry_msgs::Twist SentryChassisController::transformGlobalToBase(const geometry_msgs::Twist& global_twist, const ros::Time& time) {
-        geometry_msgs::Twist base_twist = global_twist;  // 默认返回原速度
+        geometry_msgs::Twist base_twist = global_twist;
 
         try {
             geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
@@ -147,20 +152,17 @@ namespace sentry_chassis_controller {
         return base_twist;
     }
     void SentryChassisController::reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level) {
-        // 1. 更新舵机PID参数：调用setGains(p, i, d, i_max, i_min, antiwindup=true)
-        // control_toolbox::Pid的setGains参数顺序：p, i, d, i_max, i_min, antiwindup
+        //antiwindup:抗积分饱和
         pid_lf_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
         pid_rf_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
         pid_lb_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
         pid_rb_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
 
-        // 2. 更新轮系PID参数
         pid_lf_wheel_.setGains(config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel, true);
         pid_rf_wheel_.setGains(config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel, true);
         pid_lb_wheel_.setGains(config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel, true);
         pid_rb_wheel_.setGains(config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel, true);
 
-        // 3. 日志输出（可选：验证参数更新）
         setlocale(LC_ALL,"");
         ROS_INFO("[动态更新] 舵机PID参数：P=%.3f, I=%.3f, D=%.3f, I_max=%.3f, I_min=%.3f",
                  config.p_, config.i_, config.d_, config.i_max_, config.i_min_);
@@ -169,13 +171,13 @@ namespace sentry_chassis_controller {
     }
     void SentryChassisController::cmdVelCallback(const geometry_msgs::Twist::ConstPtr &msg) {
         last_cmd_time_ = ros::Time::now();  // 更新最后指令时间
-        is_locked_ = false;  // 收到指令，退出自锁模式
+        is_locked_ = false;  //退出自锁模式
         if (use_global_vel_mode_) {
-            // 全局速度模式：转换到底盘坐标系
+            //全局速度模式：转换到底盘坐标系
             ros::Time current_time = ros::Time::now();
             cmd_vel_ = transformGlobalToBase(*msg, current_time);
         } else {
-            // 底盘速度模式：直接使用原始指令
+            //底盘速度模式：直接使用原始指令
             cmd_vel_ = *msg;
         }
 
@@ -211,12 +213,12 @@ namespace sentry_chassis_controller {
         odom_msg.header.frame_id = "odom";
         odom_msg.child_frame_id = "base_link";
 
-        // 设置位置
+        //位置
         odom_msg.pose.pose.position.x = x_;
         odom_msg.pose.pose.position.y = y_;
         odom_msg.pose.pose.position.z = 0.0;
 
-        // 设置姿态（仅yaw有值，转换为四元数）
+        //姿态
         tf2::Quaternion q;
         q.setRPY(0.0, 0.0, yaw_);
         odom_msg.pose.pose.orientation.x = q.x();
@@ -224,7 +226,7 @@ namespace sentry_chassis_controller {
         odom_msg.pose.pose.orientation.z = q.z();
         odom_msg.pose.pose.orientation.w = q.w();
 
-        // 设置速度
+        //速度
         odom_msg.twist.twist.linear.x = vx_get;
         odom_msg.twist.twist.linear.y = vy_get;
         odom_msg.twist.twist.angular.z = wz_get;
@@ -235,10 +237,9 @@ namespace sentry_chassis_controller {
         if (dt_ <= 0.0)
             return current;
 
-        double max_delta = max_accel * dt_;  // 允许的最大速度变化量
+        double max_delta = max_accel * dt_;  //最大速度变化量
         double delta = target - current;
 
-        // 限制速度变化量在[-max_delta, max_delta]范围内
         if (delta > max_delta) {
             return current + max_delta;
         } else if (delta < -max_delta) {
@@ -253,7 +254,7 @@ namespace sentry_chassis_controller {
         double tau_fr = pid_rf_wheel_.computeCommand(fr_target_vel - front_right_wheel_joint_.getVelocity(), period);
         double tau_bl = pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period);
         double tau_br = pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period);
-// 2. 获取各电机当前转速
+
         double omega_fl = front_left_wheel_joint_.getVelocity();
         double omega_fr = front_right_wheel_joint_.getVelocity();
         double omega_bl = back_left_wheel_joint_.getVelocity();
@@ -266,29 +267,28 @@ namespace sentry_chassis_controller {
 
         double sum_omega_sq = pow(omega_fl, 2) + pow(omega_fr, 2) + pow(omega_bl, 2) + pow(omega_br, 2);
 
-        double total_power = k1 * sum_tau_sq + k2 * sum_omega_sq;
+        double total_power = sum_tau_omega + (k1 * sum_tau_sq) + k2 * sum_omega_sq;
         double K = 1.0;
         if (total_power > P_max) {
-            // 5. 按照文档公式(3.22)计算缩放因子k
+
             double numerator_part = -sum_tau_omega;
             double sqrt_part = sqrt(pow(sum_tau_omega, 2) - 4 * k1 * sum_tau_sq * (k2 * sum_omega_sq - P_max));
             double denominator = 2 * k1 * sum_tau_sq;
 
-            // 处理数值计算异常
+            // 处理异常数值
             if (denominator == 0) {
                 ROS_ERROR("功率控制计算错误：分母为零");
                 K = 1.0;
-            } else if (sqrt_part != sqrt_part) {  // 检查是否为NaN
+            } else if (sqrt_part != sqrt_part) {
                 ROS_WARN("功率控制：根号内为负数");
                 K = 1.0;
             } else {
                 K = (numerator_part + sqrt_part) / denominator;
             }
 
-            // 确保缩放因子合理
             if (K <= 0 || K > 1.0) {
                 ROS_WARN("缩放因子异常，使用安全值");
-                K = 1;
+                K = 1.0;
             }
         }
         return K;
@@ -296,12 +296,10 @@ namespace sentry_chassis_controller {
     void SentryChassisController::PublishCmdmsg(ros::Time time){
         if ((time - last_publish_time_) >= publish_interval_) {
             geometry_msgs::Twist cmd_msg;
-            // 配置发布的速度指令（示例：缓慢前进+轻微转向，可根据需求修改）
-            cmd_msg.linear.x = 0.0;    // 前进速度0.2m/s
-            cmd_msg.linear.y = 0.0;    // 横向速度0
-            cmd_msg.angular.z = 6.0;   //角速度0.1rad/s（缓慢右转）
+            cmd_msg.linear.x = 1.0;
+            cmd_msg.linear.y = 0.0;
+            cmd_msg.angular.z = 0.0;
 
-            // 发布消息
             cmd_vel_pub_.publish(cmd_msg);
             setlocale(LC_ALL,"");
             ROS_DEBUG("主动发布 /cmd_vel 消息：vx=%.2f, vy=%.2f，wz=%.2f", cmd_msg.linear.x,cmd_msg.linear.y ,cmd_msg.angular.z);
@@ -320,15 +318,14 @@ namespace sentry_chassis_controller {
             is_locked_ = false;
         }
 
-        if (is_locked_) {
+        if (is_locked_) {                               //自锁模式
             double fl_angle_locked = (3 * M_PI) / 4 ;
             double fr_angle_locked = (1 * M_PI) / 4 ;
             double bl_angle_locked = (1 * M_PI) / 4 ;
             double br_angle_locked = (3 * M_PI) / 4 ;
-            // 自锁模式：固定舵机角度为0，轮速为0
-            double target_vel_locked = 0.0;    // 零速度
+            double target_vel_locked = 0.0;
 
-            // 舵机锁定（目标角度）
+            //锁定舵机角度
             front_left_pivot_joint_.setCommand(
                     pid_lf_.computeCommand(fl_angle_locked - front_left_pivot_joint_.getPosition(), period));
             front_right_pivot_joint_.setCommand(
@@ -338,7 +335,7 @@ namespace sentry_chassis_controller {
             back_right_pivot_joint_.setCommand(
                     pid_rb_.computeCommand(br_angle_locked - back_right_pivot_joint_.getPosition(), period));
 
-            // 轮速锁定（目标速度0）
+            //锁定轮速
             front_left_wheel_joint_.setCommand(
                     pid_lf_wheel_.computeCommand(target_vel_locked - front_left_wheel_joint_.getVelocity(), period));
             front_right_wheel_joint_.setCommand(
@@ -349,12 +346,12 @@ namespace sentry_chassis_controller {
                     pid_rb_wheel_.computeCommand(target_vel_locked - back_right_wheel_joint_.getVelocity(), period));
 
             ROS_DEBUG_THROTTLE(1.0, "处于自锁状态");
-            return;  // 跳过正常运动控制逻辑
+            return;  // 跳过剩下的逻辑
         }
 
-            double vx = cmd_vel_.linear.x;    // 前进/后退速度（x轴，m/s）
-            double vy = cmd_vel_.linear.y;    // 左右平移速度（y轴，m/s）
-            double wz = cmd_vel_.angular.z;   // 旋转角速度（z轴，rad/s）
+            double vx = cmd_vel_.linear.x;
+            double vy = cmd_vel_.linear.y;
+            double wz = cmd_vel_.angular.z;
 
             double dt_ = period.toSec();
 
@@ -366,44 +363,39 @@ namespace sentry_chassis_controller {
             last_vy_cmd_ = limited_vy;
             last_wz_cmd_ = limited_wz;
 
+            double half_wheel_base = wheel_base_ / 2.0;    //底盘中心到前后轮的距离
+            double half_wheel_track = wheel_track_ / 2.0;  //底盘中心到左右轮的距离
 
-        // 第二步：计算每个轮子的旋转半径（精确版：直角三角形斜边）
-            double half_wheel_base = wheel_base_ / 2.0;    // 底盘中心到前后轮的距离
-            double half_wheel_track = wheel_track_ / 2.0;  // 底盘中心到左右轮的距离
+            double fl_linear, fr_linear, bl_linear, br_linear;  //轮子线速度
+            double fl_angle, fr_angle, bl_angle, br_angle;      //舵机转向角
 
-            // 第三步：逆运动学计算——每个轮子的 目标线速度（轮机） 和 目标转向角（舵机）
-            // 轮子布局：前左(fl)、前右(fr)、后左(bl)、后右(br)
-            double fl_linear, fr_linear, bl_linear, br_linear;  // 轮子线速度（m/s）
-            double fl_angle, fr_angle, bl_angle, br_angle;      // 舵机转向角（rad，0=向前）
-
-            // -------------------------- 前左轮（fl） --------------------------
-            // 1. 计算轮子的速度矢量（x、y方向分量）
-            double fl_vx = limited_vx - limited_wz * half_wheel_track;   // 前左轮x方向速度分量
-            double fl_vy = limited_vy + limited_wz * half_wheel_base;  // 前左轮y方向速度分量
-            // 2. 计算舵机转向角
-            fl_angle = atan2(fl_vy, fl_vx);  // 范围：[-π, π]，对应转向角（向左为正，向右为负）
-            // 3. 计算轮子线速度大小
+            //前左
+            double fl_vx = limited_vx - limited_wz * half_wheel_track;   //前左轮x方向速度分量
+            double fl_vy = limited_vy + limited_wz * half_wheel_base;  //前左轮y方向速度分量
+            //舵机转向角
+            fl_angle = atan2(fl_vy, fl_vx);
+            //轮子线速度
             fl_linear = sqrt(pow(fl_vx, 2) + pow(fl_vy, 2));
 
-            // -------------------------- 前右轮（fr） --------------------------
+            // 前右
             double fr_vx = limited_vx + limited_wz * half_wheel_track;
             double fr_vy = limited_vy + limited_wz * half_wheel_base;
             fr_angle = atan2(fr_vy, fr_vx);
             fr_linear = sqrt(pow(fr_vx, 2) + pow(fr_vy, 2));
 
-            // -------------------------- 后左轮（bl） --------------------------
+            // 后左
             double bl_vx = limited_vx - limited_wz * half_wheel_track;
             double bl_vy = limited_vy - limited_wz * half_wheel_base;
             bl_angle = atan2(bl_vy, bl_vx);
             bl_linear = sqrt(pow(bl_vx, 2) + pow(bl_vy, 2));
 
-            // -------------------------- 后右轮（br） --------------------------
+            //后右
             double br_vx = limited_vx + limited_wz * half_wheel_track;
             double br_vy = limited_vy - limited_wz * half_wheel_base;
             br_angle = atan2(br_vy, br_vx);
             br_linear = sqrt(pow(br_vx, 2) + pow(br_vy, 2));
 
-            // 第四步：线速度 → 角速度（轮机目标转速，rad/s）
+            //线速度转换成轮机角速度
             double fl_target_vel = fl_linear / wheel_radius_;
             double fr_target_vel = fr_linear / wheel_radius_;
             double bl_target_vel = bl_linear / wheel_radius_;
@@ -411,8 +403,6 @@ namespace sentry_chassis_controller {
 
             double k = Compute_K(fl_target_vel, fr_target_vel, bl_target_vel, br_target_vel, period);
 
-
-            // 1. 轮机控制（原有逻辑，不变）
         front_left_wheel_joint_.setCommand(
               k * (pid_lf_wheel_.computeCommand(fl_target_vel - front_left_wheel_joint_.getVelocity(), period)));
         front_right_wheel_joint_.setCommand(
@@ -421,7 +411,7 @@ namespace sentry_chassis_controller {
               k * (pid_lb_wheel_.computeCommand(bl_target_vel - back_left_wheel_joint_.getVelocity(), period)));
         back_right_wheel_joint_.setCommand(
               k * (pid_rb_wheel_.computeCommand(br_target_vel - back_right_wheel_joint_.getVelocity(), period)));
-             // 2. 舵机控制（新增逻辑：跟踪目标转向角）
+
             front_left_pivot_joint_.setCommand(
                     pid_lf_.computeCommand(fl_angle - front_left_pivot_joint_.getPosition(), period));
             front_right_pivot_joint_.setCommand(
@@ -434,10 +424,7 @@ namespace sentry_chassis_controller {
 
 
         ros::Duration dt = time - last_update_time_;
-        if (dt.toSec() <= 0.0) {
-            last_update_time_ = time;
-            return;
-        }
+
         double fl_vel_get = front_left_wheel_joint_.getVelocity();
         double fr_vel_get = front_right_wheel_joint_.getVelocity();
         double bl_vel_get = back_left_wheel_joint_.getVelocity();
@@ -448,13 +435,13 @@ namespace sentry_chassis_controller {
         double bl_angle_get = back_left_pivot_joint_.getPosition();
         double br_angle_get = back_right_pivot_joint_.getPosition();
 
-        // 2. 将轮子角速度转换为线速度（m/s）
+        //将轮子角速度转换为线速度
         double fl_linear_get = fl_vel_get * wheel_radius_;
         double fr_linear_get = fr_vel_get * wheel_radius_;
         double bl_linear_get = bl_vel_get * wheel_radius_;
         double br_linear_get = br_vel_get * wheel_radius_;
 
-        // 3. 计算每个轮子在机体坐标系下的速度分量
+        //计算每个轮子在机体坐标系下的速度分量
         double fl_vx_get = fl_linear_get * cos(fl_angle_get);  // 前左轮x方向速度
         double fl_vy_get = fl_linear_get * sin(fl_angle_get);  // 前左轮y方向速度
         double fr_vx_get = fr_linear_get * cos(fr_angle_get);
@@ -464,30 +451,31 @@ namespace sentry_chassis_controller {
         double br_vx_get = br_linear_get * cos(br_angle_get);
         double br_vy_get = br_linear_get * sin(br_angle_get);
 
-        // 4. 计算底盘速度（取四个轮子的平均值）
-        double vx_get = (fl_vx_get + fr_vx_get + bl_vx_get + br_vx_get) / 4.0;  // 机体x方向速度
-        double vy_get = (fl_vy_get + fr_vy_get + bl_vy_get + br_vy_get) / 4.0;  // 机体y方向速度
-
-
-        // 合成角速度
+        //计算底盘速度
+        double vx_get = (fl_vx_get + fr_vx_get + bl_vx_get + br_vx_get) / 4.0;  //底盘Vx
+        double vy_get = (fl_vy_get + fr_vy_get + bl_vy_get + br_vy_get) / 4.0;  //底盘Vx
         double wz_get = (-fl_vx_get + fl_vy_get + fr_vx_get + fr_vy_get - bl_vx_get -
                          bl_vy_get + br_vx_get - br_vy_get) * wheel_radius_ / (4 * wheel_track_);
 
-        // 6. 积分计算里程计位置和航向
+        filtered_vx_ = lowPassFilter(vx_get, filtered_vx_, alpha_);
+        filtered_vy_ = lowPassFilter(vy_get, filtered_vy_, alpha_);
+        filtered_wz_ = lowPassFilter(wz_get, filtered_wz_, alpha_);
+
+        //积分计算里程计位置和航向
         double dt_sec = dt.toSec();
-        yaw_ += wz_get * dt_sec;  // 更新航向角（弧度）
+        yaw_ += filtered_wz_ * dt_sec;  //更新航向角
 
         // 转换为世界坐标系下的位移
-        double dx = (vx_get * cos(yaw_) - vy_get * sin(yaw_)) * dt_sec;
-        double dy = (vx_get * sin(yaw_) + vy_get * cos(yaw_)) * dt_sec;
+        double dx = (filtered_vx_ * cos(yaw_) - filtered_vy_ * sin(yaw_)) * dt_sec;
+        double dy = (filtered_vx_ * sin(yaw_) + filtered_vy_ * cos(yaw_)) * dt_sec;
 
-        x_ += dx;  // 更新x坐标
-        y_ += dy;  // 更新y坐标
+        x_ += dx;  //更新x坐标
+        y_ += dy;  //更新y坐标
 
-        // 7. 发布Odometry消息
+        //发布Odometry消息
         PublishOdometry(time, vx_get, vy_get, wz_get);
 
-        // 8. 发布tf变换（odom -> base_link）
+        //发布tf变换（odom -> base_link）
         PublishTF(time);
 
         last_update_time_ = time;

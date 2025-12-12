@@ -50,13 +50,13 @@ private:
     double wheel_radius_;// 轮子半径
     control_toolbox::Pid pid_lf_, pid_rf_, pid_lb_, pid_rb_;
     control_toolbox::Pid pid_lf_wheel_, pid_rf_wheel_, pid_lb_wheel_, pid_rb_wheel_;
-    double p_, i_, d_, i_max_, i_min_, p_wheel, i_wheel, d_wheel, i_max_wheel, i_min_wheel, chassis_speed;
+    double p_, i_, d_, i_max_, i_min_, p_wheel, i_wheel, d_wheel, i_max_wheel, i_min_wheel;
     ros::Subscriber cmd_vel_sub_;  // 用于接收速度指令
     geometry_msgs::Twist cmd_vel_; // 存储当前速度指令
     ros::Publisher  cmd_vel_pub_;  // /cmd_vel 发布者
 
     ros::Time last_publish_time_;   // 上一次发布时间
-    ros::Duration publish_interval_;// 发布间隔（默认0.1秒=10Hz）
+    ros::Duration publish_interval_;// 发布间隔
 
     ros::Publisher odom_pub_;
     tf2_ros::TransformBroadcaster tf_broadcaster_;
@@ -67,8 +67,8 @@ private:
     tf2_ros::TransformListener tf_listener_;   // TF监听器
     bool use_global_vel_mode_;                 // 全局坐标系速度模式开关
 
-    double max_linear_accel_;  // 最大线加速度 (m/s²)
-    double max_angular_accel_; // 最大角加速度 (rad/s²)
+    double max_linear_accel_;  // 最大线加速度
+    double max_angular_accel_; // 最大角加速度
 
     double last_vx_cmd_;
     double last_vy_cmd_;
@@ -81,6 +81,9 @@ private:
     double k1;
     double k2;
     double P_max;
+
+    double alpha_;
+    double filtered_vx_, filtered_vy_, filtered_wz_;
 
     void cmdVelCallback(const geometry_msgs::Twist::ConstPtr& msg);
 
@@ -97,6 +100,7 @@ private:
     void PublishOdometry(ros::Time time, double vx_get, double vy_get, double wz_get);
     double Compute_K(double fl_target_vel, double fr_target_vel, double bl_target_vel, double br_target_vel, ros::Duration period);
     void PublishCmdmsg(ros::Time time);
+    double lowPassFilter(double current, double filtered, double alpha);
 };
 };
 
