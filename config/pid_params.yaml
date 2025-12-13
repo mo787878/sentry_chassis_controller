@@ -20,8 +20,7 @@ sentry_chassis_controller:
     P_max : 100
     wheel_track_ : 0.362
     wheel_base_ : 0.362
-    wheel_radius_ : 0.07625
-
+    wheel_radius_ : 0.0762
 
 
 

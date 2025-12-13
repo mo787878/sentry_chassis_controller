@@ -32,11 +32,13 @@ namespace sentry_chassis_controller {
 
         wheel_track_ = controller_nh.param("other/wheel_track", 0.362);
         wheel_base_ = controller_nh.param("other/wheel_base", 0.362);
-        wheel_radius_ = controller_nh.param("other/wheel_radius", 0.07625);
+        wheel_radius_ = controller_nh.param("other/wheel_radius", 0.0762);
 
         cmd_vel_pub_ = root_nh.advertise<geometry_msgs::Twist>("/cmd_vel", 10);
         setlocale(LC_ALL,"");
         ROS_INFO("cmd_vel 发布者初始化成功！");
+        last_publish_time_ = ros::Time::now();
+        publish_interval_ = ros::Duration(0.1); //速度发布者发布频率
 
         cmd_vel_sub_ = root_nh.subscribe("/cmd_vel", 10, &SentryChassisController::cmdVelCallback, this);
         setlocale(LC_ALL,"");
@@ -68,13 +70,9 @@ namespace sentry_chassis_controller {
         pid_lb_wheel_.initPid(p_wheel, i_wheel, d_wheel, i_max_wheel, i_min_wheel);
         pid_rb_wheel_.initPid(p_wheel, i_wheel, d_wheel, i_max_wheel, i_min_wheel);
 
-
-        last_publish_time_ = ros::Time::now();
-        publish_interval_ = ros::Duration(0.1); //速度发布者发布频率
-
-        dyn_reconfig_callback_ = boost::bind(&SentryChassisController::reconfigureCallback, this, _1, _2);
-        dyn_reconfig_server_.reset(new dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>(controller_nh));
-        dyn_reconfig_server_->setCallback(dyn_reconfig_callback_);
+        dyn_reconfig_callback_ = boost::bind(&SentryChassisController::reconfigureCallback, this, _1, _2);//bind函数把this的类成员函数封装成普通函数
+        dyn_reconfig_server_.reset(new dynamic_reconfigure::Server<sentry_chassis_controller::SentryChassisParamsConfig>(controller_nh));//创建调参服务器
+        dyn_reconfig_server_->setCallback(dyn_reconfig_callback_);//注册回调函数
 
         odom_pub_ = root_nh.advertise<nav_msgs::Odometry>("/odom", 10);
         ROS_INFO("里程计发布者初始化成功！");
@@ -99,7 +97,7 @@ namespace sentry_chassis_controller {
         last_vy_cmd_ = 0.0;
         last_wz_cmd_ = 0.0;
 
-        ROS_INFO("加速度限制参数: 线加速度=%.2f m/s², 角加速度=%.2f rad/s²",
+        ROS_INFO("加速度限制参数: 线加速度=%.2f , 角加速度=%.2f ",
                  max_linear_accel_, max_angular_accel_);
 
         controller_nh.param<double>("other/cmd_timeout", cmd_timeout_, 5.0);  // 默认5秒超时
@@ -116,6 +114,7 @@ namespace sentry_chassis_controller {
         filtered_vy_ = 0.0;
         filtered_wz_ = 0.0;
         alpha_ = 0.01;
+        ROS_INFO("滤波相关函数参数初始化");
         return true;
 
     }
@@ -124,22 +123,22 @@ namespace sentry_chassis_controller {
         return alpha * current + (1 - alpha) * filtered;
     }
     geometry_msgs::Twist SentryChassisController::transformGlobalToBase(const geometry_msgs::Twist& global_twist, const ros::Time& time) {
-        geometry_msgs::Twist base_twist = global_twist;
+        geometry_msgs::Twist base_twist = global_twist; //万一坐标变换失败则返回原速度
 
         try {
             geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
                     "base_link", "odom", ros::Time(0), ros::Duration(2.0));
-             // 2. 构造全局坐标系下的线速度向量（平面运动，z轴为0）
+             //构造全局坐标系下的线速度向量（平面运动，z轴为0）
             tf2::Vector3 global_vel(global_twist.linear.x, global_twist.linear.y, 0.0);
 
-            // 3. 将ROS消息转为TF2原生Transform类型
+            //将ROS消息转为TF2原生Transform类型
             tf2::Transform tf_transform;
             tf2::fromMsg(transform.transform, tf_transform);
 
-            // tf2::Transform * tf2::Vector3 → 自动完成向量的旋转变换
+            //tf2::Transform * tf2::Vector3 → 自动完成向量的旋转变换
             tf2::Vector3 base_vel = tf_transform * global_vel;
 
-            // 4. 更新底盘速度
+            //更新底盘速度
             base_twist.linear.x = base_vel.x();
             base_twist.linear.y = base_vel.y();
             base_twist.angular.z = global_twist.angular.z;
@@ -152,7 +151,7 @@ namespace sentry_chassis_controller {
         return base_twist;
     }
     void SentryChassisController::reconfigureCallback(sentry_chassis_controller::SentryChassisParamsConfig &config, uint32_t level) {
-        //antiwindup:抗积分饱和
+        //antiwindup:是否抗积分饱和
         pid_lf_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
         pid_rf_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
         pid_lb_.setGains(config.p_, config.i_, config.d_, config.i_max_, config.i_min_, true);
@@ -166,7 +165,7 @@ namespace sentry_chassis_controller {
         setlocale(LC_ALL,"");
         ROS_INFO("[动态更新] 舵机PID参数：P=%.3f, I=%.3f, D=%.3f, I_max=%.3f, I_min=%.3f",
                  config.p_, config.i_, config.d_, config.i_max_, config.i_min_);
-        ROS_INFO("[动态更新] 轮系PID参数：P=%.3f, I=%.3f, D=%.3f, I_max=%.3f, I_min=%.3f",
+        ROS_INFO("[动态更新] 轮机PID参数：P=%.3f, I=%.3f, D=%.3f, I_max=%.3f, I_min=%.3f",
                  config.p_wheel, config.i_wheel, config.d_wheel, config.i_max_wheel, config.i_min_wheel);
     }
     void SentryChassisController::cmdVelCallback(const geometry_msgs::Twist::ConstPtr &msg) {
@@ -180,14 +179,10 @@ namespace sentry_chassis_controller {
             //底盘速度模式：直接使用原始指令
             cmd_vel_ = *msg;
         }
-
-        static ros::Time last_log_time = ros::Time::now();
-        if ((ros::Time::now() - last_log_time).toSec() > 1.0) {
-            setlocale(LC_ALL,"");
-            ROS_INFO("成功收到 /cmd_vel 消息：vx=%.2f m/s, vy=%.2f m/s, wz=%.2f rad/s",
+        setlocale(LC_ALL,"");
+        ROS_INFO("成功收到 /cmd_vel 消息：vx=%.2f m/s, vy=%.2f m/s, wz=%.2f rad/s",
                      msg->linear.x, msg->linear.y, msg->angular.z);
-            last_log_time = ros::Time::now();
-        }
+
     }
     void SentryChassisController::PublishTF(ros::Time time){
         geometry_msgs::TransformStamped transform_stamped;
@@ -267,27 +262,27 @@ namespace sentry_chassis_controller {
 
         double sum_omega_sq = pow(omega_fl, 2) + pow(omega_fr, 2) + pow(omega_bl, 2) + pow(omega_br, 2);
 
-        double total_power = sum_tau_omega + (k1 * sum_tau_sq) + k2 * sum_omega_sq;
+        double total_power = sum_tau_omega + (k1 * sum_tau_sq) + (k2 * sum_omega_sq);
         double K = 1.0;
         if (total_power > P_max) {
 
-            double numerator_part = -sum_tau_omega;
-            double sqrt_part = sqrt(pow(sum_tau_omega, 2) - 4 * k1 * sum_tau_sq * (k2 * sum_omega_sq - P_max));
-            double denominator = 2 * k1 * sum_tau_sq;
+            double numerator_part = -sum_tau_omega;//分子
+            double sqrt_part = sqrt(pow(sum_tau_omega, 2) - 4 * k1 * sum_tau_sq * (k2 * sum_omega_sq - P_max));//二次方根项
+            double denominator = 2 * k1 * sum_tau_sq;//分母
 
             // 处理异常数值
             if (denominator == 0) {
-                ROS_ERROR("功率控制计算错误：分母为零");
+                ROS_ERROR("错误：分母为零");
                 K = 1.0;
             } else if (sqrt_part != sqrt_part) {
-                ROS_WARN("功率控制：根号内为负数");
+                ROS_WARN("错误：根号内为负数");
                 K = 1.0;
             } else {
                 K = (numerator_part + sqrt_part) / denominator;
             }
 
             if (K <= 0 || K > 1.0) {
-                ROS_WARN("缩放因子异常，使用安全值");
+                ROS_WARN("K异常，使用默认值");
                 K = 1.0;
             }
         }
